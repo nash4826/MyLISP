@@ -15,16 +15,24 @@
 > Sample
 
 lispy> + 1 (\* 7 5) 3
+
 39
+
 lispy> (- 100)
+
 -100
+
 lispy>
+
 ()
+
 lispy> /
+
 /
+
 lispy> (/ ())
+
 Error: Cannot operate on non-number!
-lispy>
 
 # 진행상황
 
