@@ -36,7 +36,7 @@ Error: Cannot operate on non-number!
 
 # 진행상황
 
-<li>Q Expressions</li>
+<li>Chapter12 Complete</li>
 <li>makefile 만들기</li>
 
 Error Message 는 한글로 입력하면 글자 깨짐 현상 발생
