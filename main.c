@@ -4,6 +4,13 @@
 
 #ifdef _WIN32
 
+#define LASSERT(args, cond, err) \
+	if (!(cond))                   \
+	{                              \
+		lval_del(args);              \
+		return lval_err(err);        \
+	}
+
 static char buffer[2048];
 
 char *readline(char *prompt)
@@ -34,8 +41,9 @@ enum
 	LVAL_ERR,
 	LVAL_NUM,
 	LVAL_SYM,
-	LVAL_SEXPR
-}; // 0,1,2,3
+	LVAL_SEXPR,
+	LVAL_QEXPR
+}; // 0,1,2,3,4
 
 // Lisp Value Struct
 typedef struct lval
@@ -93,6 +101,15 @@ lval *lval_sexpr(void)
 	return v;
 }
 
+lval *lval_qexpr(void)
+{
+	lval *v = malloc(sizeof(lval));
+	v->type = LVAL_QEXPR;
+	v->count = 0;
+	v->cell = NULL;
+	return v;
+}
+
 void lval_del(lval *v)
 {
 	switch (v->type)
@@ -107,7 +124,8 @@ void lval_del(lval *v)
 	case LVAL_SYM:
 		free(v->sym);
 		break;
-		/* Sexpr가 존재하면 내부의 모든 요소 삭제 */
+	/* Sexpr or Qexpr 가 존재하면 내부의 모든 요소 삭제 */
+	case LVAL_QEXPR:
 	case LVAL_SEXPR:
 		for (int i = 0; i < v->count; i++)
 		{
@@ -143,6 +161,19 @@ lval *lval_pop(lval *v, int i)
 
 	/* 사용된 메모리 재할당 */
 	v->cell = realloc(v->cell, sizeof(lval *) * v->count);
+	return x;
+}
+
+lval *lval_join(lval *x, lval *y)
+{
+	/*y에 있는 모든 cell을 순회하면서 x 에 할당*/
+	while (y->count)
+	{
+		x = lval_add(x, lval_pop(y, 0));
+	}
+
+	/*비어있는 y를 삭제 후 x를 리턴*/
+	lval_del(y);
 	return x;
 }
 
@@ -190,6 +221,9 @@ void lval_print(lval *v)
 	case LVAL_SEXPR:
 		lval_expr_print(v, '(', ')');
 		break;
+	case LVAL_QEXPR:
+		lval_expr_print(v, '{', '}');
+		break;
 	}
 }
 
@@ -202,6 +236,74 @@ void lval_println(lval *v)
 /********************************************************/
 
 /*             Eval             */
+
+lval *lval_eval(lval *v);
+
+lval *builtin_list(lval *a)
+{
+	a->type = LVAL_QEXPR;
+	return a;
+}
+
+lval *builtin_head(lval *a)
+{
+	/* 에러 확인 */
+	LASSERT(a, a->count == 1, "Function 'head' passed too many arguments!");
+	LASSERT(a, a->cell[0]->type == LVAL_QEXPR, "Function 'head' passed incorrct types!");
+	LASSERT(a, a->cell[0]->count != 0, "Function 'head' passed {}!");
+
+	/*에러 없으면 첫번째 인자 가져오기*/
+	lval *v = lval_take(a, 0);
+
+	/*모든 요소(head가 없는) 삭제 그리고 리턴*/
+	while (v->count > 1)
+	{
+		lval_del(lval_pop(v, 1));
+	}
+	return v;
+}
+
+lval *builtin_tail(lval *a)
+{
+	/* 에러 확인 */
+	LASSERT(a, a->count == 1, "Function 'tail' passed too many arguments!");
+	LASSERT(a, a->cell[0]->type == LVAL_QEXPR, "Function 'tail' passed incorrct types!");
+	LASSERT(a, a->cell[0]->count != 0, "Function 'tail' passed {}!");
+
+	/*에러 없으면 첫번째 인자 가져오기*/
+	lval *v = lval_take(a, 0);
+
+	/*첫번째 요소 삭제 그리고 리턴*/
+	lval_del(lval_pop(v, 0));
+	return v;
+}
+
+lval *builtin_eval(lval *a)
+{
+	LASSERT(a, a->count == 1, "Function 'eval' passed too many arguments!");
+	LASSERT(a, a->cell[0]->type == LVAL_QEXPR, "Function 'eval' passed incorrect type!");
+
+	lval *x = lval_take(a, 0);
+	x->type = LVAL_SEXPR;
+	return lval_eval(x);
+}
+
+lval *builtin_join(lval *a)
+{
+	for (int i = 0; i < a->count; i++)
+	{
+		LASSERT(a, a->cell[i]->type == LVAL_QEXPR, "Function 'join' passed incorrect type!");
+	}
+
+	lval *x = lval_pop(a, 0);
+
+	while (a->count)
+	{
+		x = lval_join(x, lval_pop(a, 0));
+	}
+	lval_del(a);
+	return x;
+}
 
 lval *builtin_op(lval *a, char *op)
 {
@@ -264,7 +366,36 @@ lval *builtin_op(lval *a, char *op)
 	return x;
 }
 
-lval *lval_eval(lval *v);
+lval *builtin(lval *a, char *func)
+{
+	if (strcmp("list", func) == 0)
+	{
+		return builtin_list(a);
+	}
+	if (strcmp("head", func) == 0)
+	{
+		return builtin_head(a);
+	}
+	if (strcmp("tail", func) == 0)
+	{
+		return builtin_tail(a);
+	}
+	if (strcmp("join", func) == 0)
+	{
+		return builtin_join(a);
+	}
+	if (strcmp("eval", func) == 0)
+	{
+		return builtin_eval(a);
+	}
+	if (strstr("+-/*", func) == 0)
+	{
+		return builtin_op(a, func);
+	}
+
+	lval_del(a);
+	return lval_err("Unknown Function!");
+}
 
 lval *lval_eval_sexpr(lval *v)
 {
@@ -304,7 +435,7 @@ lval *lval_eval_sexpr(lval *v)
 
 	/* builtin 함수 호출 */
 
-	lval *result = builtin_op(v, f->sym);
+	lval *result = builtin(v, f->sym);
 	lval_del(f);
 	return result;
 }
@@ -355,6 +486,10 @@ lval *lval_read(mpc_ast_t *t)
 	{
 		x = lval_sexpr();
 	}
+	if (strstr(t->tag, "qexpr"))
+	{
+		x = lval_qexpr();
+	}
 
 	/* 유효한 표현식이 포함되어 있는 리스트 채우기*/
 	for (int i = 0; i < t->children_num; i++)
@@ -363,6 +498,11 @@ lval *lval_read(mpc_ast_t *t)
 			continue;
 		if (strcmp(t->children[i]->contents, ")") == 0)
 			continue;
+		if (strcmp(t->children[i]->contents, "{") == 0)
+			continue;
+		if (strcmp(t->children[i]->contents, "}") == 0)
+			continue;
+
 		if (strcmp(t->children[i]->tag, "regex") == 0)
 			continue;
 
@@ -380,6 +520,7 @@ int main(int argc, char **argv)
 	mpc_parser_t *Number = mpc_new("number");
 	mpc_parser_t *Symbol = mpc_new("symbol");
 	mpc_parser_t *Sexpr = mpc_new("sexpr");
+	mpc_parser_t *Qexpr = mpc_new("qexpr");
 	mpc_parser_t *Expr = mpc_new("expr");
 	mpc_parser_t *Lispy = mpc_new("lispy");
 
@@ -387,12 +528,13 @@ int main(int argc, char **argv)
 	mpca_lang(MPCA_LANG_DEFAULT,
 						" 															\
       number : /-?[0-9]+/ ;                             \
-      symbol : '+' | '-' | '*' | '/' ;                  \
+      symbol : \"list\" | \"head\" | \"tail\" | \"join\" | \"eval\" | '+' | '-' | '*' | '/' ;                  \
 			sexpr	: '(' <expr>* ')' ; \
-			expr : <number> | <symbol> | <sexpr> ; \
+			qexpr : '{' <expr>* '}'; \
+			expr : <number> | <symbol> | <sexpr> | <qexpr>; \
 			lispy : /^/ <expr>* /$/ ; \
 		",
-						Number, Symbol, Sexpr, Expr, Lispy);
+						Number, Symbol, Sexpr, Qexpr, Expr, Lispy);
 	/*Information print*/
 	puts("Lispy Version 1.0.1");
 	puts("Press Ctrl + C to Exit\n");
@@ -423,6 +565,6 @@ int main(int argc, char **argv)
 	}
 
 	/*parser들 해제*/
-	mpc_cleanup(5, Number, Symbol, Sexpr, Expr, Lispy);
+	mpc_cleanup(6, Number, Symbol, Sexpr, Qexpr, Expr, Lispy);
 	return 0;
 }
